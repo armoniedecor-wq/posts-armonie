@@ -228,6 +228,7 @@
   const SYNC_PRODUCTS_FN_URL = `${FUNCTIONS_BASE_URL}/sync-products`;
   const LINK_AND_POST_FN_URL = `${FUNCTIONS_BASE_URL}/link-and-post`;
   const IMAGE_PROXY_FN_URL = `${FUNCTIONS_BASE_URL}/image-proxy`;
+  const PUBLISH_POST_FN_URL = `${FUNCTIONS_BASE_URL}/publish-post`;
   // =============================
 
   // Imagens do AliExpress são bloqueadas pelo navegador (ERR_BLOCKED_BY_ORB)
@@ -503,10 +504,10 @@
         <textarea class="copy-edit">${escapeHtml(post.copy || '')}</textarea>
         <div class="card-actions">
           ${post.status === 'pending' ? `
-            <button class="btn btn-primary approve-btn">Autorizar</button>
+            <button class="btn btn-primary approve-btn">Autorizar e publicar</button>
             <button class="btn btn-danger reject-btn">Rejeitar</button>
           ` : `
-            <button class="btn btn-ghost" disabled>Aguardando publicação automática</button>
+            <button class="btn btn-ghost" disabled>Rejeitado</button>
           `}
         </div>
       </div>
@@ -517,12 +518,24 @@
     if (post.status === 'pending') {
       card.querySelector('.approve-btn').addEventListener('click', async (e) => {
         e.target.disabled = true;
-        e.target.innerHTML = '<span class="loader"></span>';
-        const { error } = await supabaseClient
+        e.target.innerHTML = '<span class="loader"></span> Publicando...';
+
+        // Salva qualquer edição na legenda antes de publicar
+        await supabaseClient
           .from('posts_queue')
-          .update({ status: 'approved', copy: textarea.value })
+          .update({ copy: textarea.value })
           .eq('id', post.id);
-        if (error) alert('Erro: ' + error.message);
+
+        const res = await fetch(PUBLISH_POST_FN_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({ post_id: post.id }),
+        });
+        const data = await res.json();
+        if (!res.ok) alert('Erro ao publicar no Instagram: ' + data.error);
         loadQueue();
       });
 
