@@ -6,7 +6,7 @@
 <title>Fila de Posts — AliExpress → Instagram</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="vendor/supabase.js"></script>
 <style>
   :root{
     --bg: #0F1115;
@@ -229,7 +229,7 @@
   const LINK_AND_POST_FN_URL = `${FUNCTIONS_BASE_URL}/link-and-post`;
   // =============================
 
-  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
   // --- Tabs ---
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -276,7 +276,7 @@
 
   async function loadProducts() {
     productsGrid.innerHTML = '<div class="empty">Carregando...</div>';
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('product_links')
       .select('*')
       .order('created_at', { ascending: false });
@@ -460,7 +460,7 @@
 
   async function loadQueue() {
     grid.innerHTML = '<div class="empty">Carregando...</div>';
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('posts_queue')
       .select('*')
       .neq('status', 'published')
@@ -510,7 +510,7 @@
       card.querySelector('.approve-btn').addEventListener('click', async (e) => {
         e.target.disabled = true;
         e.target.innerHTML = '<span class="loader"></span>';
-        const { error } = await supabase
+        const { error } = await supabaseClient
           .from('posts_queue')
           .update({ status: 'approved', copy: textarea.value })
           .eq('id', post.id);
@@ -519,7 +519,7 @@
       });
 
       card.querySelector('.reject-btn').addEventListener('click', async () => {
-        const { error } = await supabase
+        const { error } = await supabaseClient
           .from('posts_queue')
           .update({ status: 'rejected' })
           .eq('id', post.id);
