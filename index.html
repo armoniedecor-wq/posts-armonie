@@ -172,6 +172,7 @@
   <nav>
     <button class="tab-btn active" data-tab="products">Meus produtos</button>
     <button class="tab-btn" data-tab="add">Adicionar produto</button>
+    <button class="tab-btn" data-tab="import">Importar pra Shopify</button>
     <button class="tab-btn" data-tab="queue">Fila de validação</button>
   </nav>
 
@@ -196,6 +197,20 @@
       </div>
       <div class="status-msg" id="fetch-status"></div>
       <div class="preview" id="preview" style="display:none;"></div>
+    </div>
+  </section>
+
+  <!-- IMPORTAR PRA SHOPIFY -->
+  <section class="panel" id="panel-import">
+    <div class="add-card">
+      <h2 style="font-family:'Space Grotesk';font-size:16px;margin:0;">Importar produto do AliExpress pra Shopify</h2>
+      <p class="lead">Cria o produto como rascunho, com preço já calculado (custo x 2,2, arredondado pra ,90).</p>
+      <div class="url-row">
+        <input type="url" id="import-url" placeholder="https://pt.aliexpress.com/item/..." />
+        <button class="btn btn-primary" id="import-btn">Importar</button>
+      </div>
+      <div class="status-msg" id="import-status"></div>
+      <div class="preview" id="import-preview" style="display:none;"></div>
     </div>
   </section>
 
@@ -229,6 +244,7 @@
   const LINK_AND_POST_FN_URL = `${FUNCTIONS_BASE_URL}/link-and-post`;
   const IMAGE_PROXY_FN_URL = `${FUNCTIONS_BASE_URL}/image-proxy`;
   const PUBLISH_POST_FN_URL = `${FUNCTIONS_BASE_URL}/publish-post`;
+  const IMPORT_TO_SHOPIFY_FN_URL = `${FUNCTIONS_BASE_URL}/import-to-shopify`;
   // =============================
 
   // Imagens do AliExpress são bloqueadas pelo navegador (ERR_BLOCKED_BY_ORB)
@@ -428,6 +444,54 @@
       </div>
     `;
   }
+
+  // --- Importar pra Shopify ---
+  const importUrlInput = document.getElementById('import-url');
+  const importBtn = document.getElementById('import-btn');
+  const importStatus = document.getElementById('import-status');
+  const importPreview = document.getElementById('import-preview');
+
+  importBtn.addEventListener('click', async () => {
+    const url = importUrlInput.value.trim();
+    if (!url) return;
+
+    importBtn.disabled = true;
+    importBtn.innerHTML = '<span class="loader"></span> Importando...';
+    importStatus.textContent = '';
+    importStatus.className = 'status-msg';
+    importPreview.style.display = 'none';
+
+    try {
+      const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ product_url: url }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
+
+      importStatus.textContent = 'Produto criado como rascunho na Shopify!';
+      importStatus.classList.add('ok');
+      importPreview.style.display = 'flex';
+      importPreview.innerHTML = `
+        <div class="meta">
+          <strong>${escapeHtml(data.title)}</strong>
+          <div style="margin-top:6px;">Preço de custo: R$ ${data.cost_price.toFixed(2)} → Preço de venda: R$ ${data.price.toFixed(2)}</div>
+          <div style="margin-top:6px;"><a href="${data.admin_url}" target="_blank" style="color:var(--accent);">Abrir na Shopify →</a></div>
+        </div>
+      `;
+      importUrlInput.value = '';
+    } catch (err) {
+      importStatus.textContent = err.message;
+      importStatus.classList.add('err');
+    } finally {
+      importBtn.disabled = false;
+      importBtn.textContent = 'Importar';
+    }
+  });
 
   // --- Fila de validação ---
   const grid = document.getElementById('queue-grid');
