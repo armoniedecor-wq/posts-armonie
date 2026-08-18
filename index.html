@@ -227,7 +227,15 @@
   const FETCH_PRODUCT_FN_URL = `${FUNCTIONS_BASE_URL}/fetch-product`;
   const SYNC_PRODUCTS_FN_URL = `${FUNCTIONS_BASE_URL}/sync-products`;
   const LINK_AND_POST_FN_URL = `${FUNCTIONS_BASE_URL}/link-and-post`;
+  const IMAGE_PROXY_FN_URL = `${FUNCTIONS_BASE_URL}/image-proxy`;
   // =============================
+
+  // Imagens do AliExpress são bloqueadas pelo navegador (ERR_BLOCKED_BY_ORB)
+  // se carregadas direto. Passamos elas pelo nosso proxy server-side.
+  function proxyImage(url) {
+    if (!url) return url;
+    return `${IMAGE_PROXY_FN_URL}?url=${encodeURIComponent(url)}`;
+  }
 
   const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -302,16 +310,16 @@
     const candidatesHtml = link.status === 'needs_review'
       ? (link.candidates && link.candidates.length
           ? `<div class="candidates">${link.candidates.map((c, i) =>
-              `<img class="candidate-thumb" src="${c.image_url}" title="Usar esta imagem" data-idx="${i}" />`
+              `<img class="candidate-thumb" src="${proxyImage(c.image_url)}" title="Usar esta imagem" data-idx="${i}" />`
             ).join('')}</div>`
           : `<div class="no-candidates">Nenhum candidato encontrado no AliExpress pra esse produto.</div>`)
       : `<div class="linked-preview">
-           <img src="${link.aliexpress_image_url}" alt="" />
+           <img src="${proxyImage(link.aliexpress_image_url)}" alt="" />
            <span class="pill approved">Vinculado</span>
          </div>`;
 
     card.innerHTML = `
-      <img src="${link.shopify_image || link.aliexpress_image_url || ''}" alt="" />
+      <img src="${link.shopify_image || proxyImage(link.aliexpress_image_url) || ''}" alt="" />
       <div class="card-body">
         <span class="pill ${link.status === 'linked' ? 'approved' : 'pending'}">${link.status === 'linked' ? 'Vinculado' : 'Escolher imagem'}</span>
         <div class="card-title">${escapeHtml(link.shopify_title)}</div>
@@ -412,7 +420,7 @@
   function renderPreview(post) {
     previewEl.style.display = 'flex';
     previewEl.innerHTML = `
-      <img src="${post.image_url}" alt="" />
+      <img src="${proxyImage(post.image_url)}" alt="" />
       <div class="meta">
         <strong>${escapeHtml(post.title)}</strong>
         <div style="margin-top:6px;">${escapeHtml(post.copy)}</div>
@@ -488,7 +496,7 @@
     const statusLabel = { pending: 'Pendente', approved: 'Autorizado', rejected: 'Rejeitado' }[post.status] || post.status;
 
     card.innerHTML = `
-      <img src="${post.image_url}" alt="" />
+      <img src="${proxyImage(post.image_url)}" alt="" />
       <div class="card-body">
         <span class="pill ${post.status}">${statusLabel}</span>
         <div class="card-title">${escapeHtml(post.title)}</div>
