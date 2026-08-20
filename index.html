@@ -287,7 +287,7 @@
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
 
-      syncStatus.textContent = `${data.newly_synced} produto(s) novo(s) sincronizado(s)${data.failed ? ` — ${data.failed} falharam ao buscar no AliExpress` : ''}.`;
+      syncStatus.textContent = `${data.newly_synced} produto(s) novo(s) sincronizado(s)${data.failed ? ` — ${data.failed} falharam ao buscar no AliExpress` : ''}.${data.remaining > 0 ? ` Ainda restam ${data.remaining} produto(s) — clique em "Sincronizar produtos" de novo pra continuar.` : ''}`;
       syncStatus.classList.add('ok');
       loadProducts();
     } catch (err) {
