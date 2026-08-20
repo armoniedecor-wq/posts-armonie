@@ -126,6 +126,11 @@
   .pill.rejected::before{ background:var(--danger); }
 
   .card-title{ font-size:13px; color:var(--text-dim); }
+  .error-msg{
+    font-size:12px; color:var(--danger); background:var(--danger-dim);
+    border:1px solid #4a1f28; border-radius:8px; padding:8px 10px; line-height:1.4;
+    max-height:80px; overflow-y:auto; word-break:break-word;
+  }
   textarea.copy-edit{
     width:100%; min-height:76px; background:var(--surface-2); border:1px solid var(--border);
     border-radius:8px; color:var(--text); font-family:'Inter'; font-size:13px; padding:9px;
@@ -174,6 +179,7 @@
     <button class="tab-btn" data-tab="add">Adicionar produto</button>
     <button class="tab-btn" data-tab="import">Importar pra Shopify</button>
     <button class="tab-btn" data-tab="queue">Fila de validação</button>
+    <button class="tab-btn" data-tab="history">Histórico</button>
   </nav>
 
   <!-- MEUS PRODUTOS (Shopify -> candidatos AliExpress) -->
@@ -232,6 +238,15 @@
     </div>
     <div class="grid" id="queue-grid"></div>
   </section>
+
+  <!-- HISTÓRICO -->
+  <section class="panel" id="panel-history">
+    <div class="queue-head">
+      <h2>Posts já publicados</h2>
+      <span class="count-pill" id="history-count">0</span>
+    </div>
+    <div class="grid" id="history-grid"></div>
+  </section>
 </div>
 
 <script>
@@ -265,6 +280,7 @@
       document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
       if (btn.dataset.tab === 'queue') loadQueue();
       if (btn.dataset.tab === 'products') loadProducts();
+      if (btn.dataset.tab === 'history') loadHistory();
     });
   });
 
@@ -565,6 +581,7 @@
       <div class="card-body">
         <span class="pill ${post.status}">${statusLabel}</span>
         <div class="card-title">${escapeHtml(post.title)}</div>
+        ${post.error ? `<div class="error-msg">⚠ ${escapeHtml(post.error)}</div>` : ''}
         <textarea class="copy-edit">${escapeHtml(post.copy || '')}</textarea>
         <div class="card-actions">
           ${post.status === 'pending' ? `
@@ -621,6 +638,57 @@
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  // --- Histórico ---
+  const historyGrid = document.getElementById('history-grid');
+  const historyCount = document.getElementById('history-count');
+
+  async function loadHistory() {
+    historyGrid.innerHTML = '<div class="empty">Carregando...</div>';
+    const { data, error } = await supabaseClient
+      .from('posts_queue')
+      .select('*')
+      .eq('status', 'published')
+      .order('published_at', { ascending: false });
+
+    if (error) {
+      historyGrid.innerHTML = `<div class="empty">Erro ao carregar: ${escapeHtml(error.message)}</div>`;
+      return;
+    }
+
+    historyCount.textContent = data.length;
+
+    if (!data.length) {
+      historyGrid.innerHTML = '<div class="empty">Nenhum post publicado ainda.</div>';
+      return;
+    }
+
+    historyGrid.innerHTML = '';
+    data.forEach(post => historyGrid.appendChild(renderHistoryCard(post)));
+  }
+
+  function renderHistoryCard(post) {
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    const publishedDate = post.published_at
+      ? new Date(post.published_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+      : '—';
+
+    card.innerHTML = `
+      <img src="${proxyImage(post.image_url)}" alt="" />
+      <div class="card-body">
+        <span class="pill published">Publicado</span>
+        <div class="card-title">${escapeHtml(post.title)}</div>
+        <div style="font-size:12px; color:var(--text-dim);">${publishedDate}</div>
+        ${post.instagram_permalink
+          ? `<a href="${post.instagram_permalink}" target="_blank" style="color:var(--accent); font-size:13px;">Ver no Instagram →</a>`
+          : ''}
+      </div>
+    `;
+
+    return card;
   }
 
   loadProducts();
