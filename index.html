@@ -152,6 +152,20 @@
   }
   .candidate-thumb:hover{ border-color:var(--accent); }
   .candidate-thumb.selected{ border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-dim); }
+  .manage-thumb-wrap{ display:flex; flex-direction:column; align-items:center; gap:4px; }
+  .manage-thumb-controls{ display:flex; gap:2px; }
+  .thumb-btn{
+    width:20px; height:20px; border-radius:5px; border:1px solid var(--border);
+    background:var(--surface-2); color:var(--text-dim); font-size:11px; line-height:1;
+    cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0;
+  }
+  .thumb-btn:hover:not(:disabled){ border-color:var(--accent); color:var(--text); }
+  .thumb-btn:disabled{ opacity:.3; cursor:default; }
+  .remove-thumb-btn:hover{ border-color:var(--danger); color:var(--danger); }
+  .carousel-note{
+    font-size:12px; color:var(--text-dim); background:var(--surface-2);
+    border:1px solid var(--border); border-radius:8px; padding:6px 10px;
+  }
   .linked-preview{ display:flex; align-items:center; gap:10px; }
   .linked-preview img{ width:56px; height:56px; border-radius:8px; object-fit:cover; border:2px solid var(--accent); }
   .no-candidates{ font-size:12.5px; color:var(--text-dim); font-style:italic; }
@@ -581,14 +595,34 @@
       rejected: 'Rejeitado',
     }[post.status] || post.status;
 
+    // Lista de imagens que serão publicadas: se não tiver image_candidates
+    // (posts de outros fluxos), usa só a image_url como imagem única.
+    const images = (post.image_candidates && post.image_candidates.length)
+      ? post.image_candidates
+      : [post.image_url];
+    const isEditable = post.status === 'pending' || post.status === 'approved';
+    const carouselNote = images.length > 1
+      ? `<div class="carousel-note">📷 ${images.length} fotos — vai publicar em carrossel. Remova até sobrar 1 pra publicar como foto única.</div>`
+      : '';
+
     card.innerHTML = `
-      <img src="${proxyImage(post.image_url)}" alt="" />
+      <img src="${proxyImage(images[0])}" alt="" />
       <div class="card-body">
         <span class="pill ${post.status}">${statusLabel}</span>
         <div class="card-title">${escapeHtml(post.title)}</div>
-        ${post.status === 'pending' && post.image_candidates && post.image_candidates.length > 1 ? `
-          <div class="candidates">${post.image_candidates.map((url, i) =>
-            `<img class="candidate-thumb ${url === post.image_url ? 'selected' : ''}" src="${proxyImage(url)}" data-idx="${i}" title="Usar esta imagem" />`
+        ${carouselNote}
+        ${isEditable ? `
+          <div class="candidates" id="manage-images-${post.id}">${images.map((url, i) =>
+            `<div class="manage-thumb-wrap">
+               <img class="candidate-thumb" src="${proxyImage(url)}" title="Foto ${i + 1}" />
+               ${images.length > 1 ? `
+                 <div class="manage-thumb-controls">
+                   <button class="thumb-btn move-left-btn" data-idx="${i}" ${i === 0 ? 'disabled' : ''} title="Mover pra esquerda">‹</button>
+                   <button class="thumb-btn remove-thumb-btn" data-idx="${i}" title="Remover esta foto">✕</button>
+                   <button class="thumb-btn move-right-btn" data-idx="${i}" ${i === images.length - 1 ? 'disabled' : ''} title="Mover pra direita">›</button>
+                 </div>
+               ` : ''}
+             </div>`
           ).join('')}</div>
         ` : ''}
         ${post.error ? `<div class="error-msg">⚠ ${escapeHtml(post.error)}</div>` : ''}
@@ -610,22 +644,44 @@
     const textarea = card.querySelector('textarea');
     const mainImg = card.querySelector('img');
 
-    if (post.status === 'pending' && post.image_candidates && post.image_candidates.length > 1) {
-      card.querySelectorAll('.candidate-thumb').forEach((thumb) => {
-        thumb.addEventListener('click', async () => {
-          const idx = Number(thumb.dataset.idx);
-          const chosenUrl = post.image_candidates[idx];
+    async function updateImages(newImages) {
+      const { error } = await supabaseClient
+        .from('posts_queue')
+        .update({ image_candidates: newImages, image_url: newImages[0] })
+        .eq('id', post.id);
+      if (error) { alert('Erro ao atualizar fotos: ' + error.message); return; }
+      post.image_candidates = newImages;
+      post.image_url = newImages[0];
+      loadQueue(); // recarrega pra re-renderizar o card com a lista atualizada
+    }
 
-          mainImg.src = proxyImage(chosenUrl);
-          card.querySelectorAll('.candidate-thumb').forEach((t) => t.classList.remove('selected'));
-          thumb.classList.add('selected');
+    if (isEditable && images.length > 0) {
+      card.querySelectorAll('.remove-thumb-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          if (images.length <= 1) return; // nunca remove a última
+          const idx = Number(btn.dataset.idx);
+          const newImages = images.filter((_, i) => i !== idx);
+          updateImages(newImages);
+        });
+      });
 
-          const { error } = await supabaseClient
-            .from('posts_queue')
-            .update({ image_url: chosenUrl })
-            .eq('id', post.id);
-          if (error) alert('Erro ao trocar imagem: ' + error.message);
-          post.image_url = chosenUrl; // mantém consistente se o card for reusado
+      card.querySelectorAll('.move-left-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const idx = Number(btn.dataset.idx);
+          if (idx === 0) return;
+          const newImages = [...images];
+          [newImages[idx - 1], newImages[idx]] = [newImages[idx], newImages[idx - 1]];
+          updateImages(newImages);
+        });
+      });
+
+      card.querySelectorAll('.move-right-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const idx = Number(btn.dataset.idx);
+          if (idx === images.length - 1) return;
+          const newImages = [...images];
+          [newImages[idx + 1], newImages[idx]] = [newImages[idx], newImages[idx + 1]];
+          updateImages(newImages);
         });
       });
     }
