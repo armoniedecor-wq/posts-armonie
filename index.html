@@ -151,6 +151,7 @@
     border:2px solid var(--border); transition:.15s;
   }
   .candidate-thumb:hover{ border-color:var(--accent); }
+  .candidate-thumb.selected{ border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-dim); }
   .linked-preview{ display:flex; align-items:center; gap:10px; }
   .linked-preview img{ width:56px; height:56px; border-radius:8px; object-fit:cover; border:2px solid var(--accent); }
   .no-candidates{ font-size:12.5px; color:var(--text-dim); font-style:italic; }
@@ -574,19 +575,31 @@
   function renderCard(post) {
     const card = document.createElement('div');
     card.className = 'card';
-    const statusLabel = { pending: 'Pendente', approved: 'Autorizado', rejected: 'Rejeitado' }[post.status] || post.status;
+    const statusLabel = {
+      pending: 'Pendente',
+      approved: 'Aprovado — aguarda horário',
+      rejected: 'Rejeitado',
+    }[post.status] || post.status;
 
     card.innerHTML = `
       <img src="${proxyImage(post.image_url)}" alt="" />
       <div class="card-body">
         <span class="pill ${post.status}">${statusLabel}</span>
         <div class="card-title">${escapeHtml(post.title)}</div>
+        ${post.status === 'pending' && post.image_candidates && post.image_candidates.length > 1 ? `
+          <div class="candidates">${post.image_candidates.map((url, i) =>
+            `<img class="candidate-thumb ${url === post.image_url ? 'selected' : ''}" src="${proxyImage(url)}" data-idx="${i}" title="Usar esta imagem" />`
+          ).join('')}</div>
+        ` : ''}
         ${post.error ? `<div class="error-msg">⚠ ${escapeHtml(post.error)}</div>` : ''}
-        <textarea class="copy-edit">${escapeHtml(post.copy || '')}</textarea>
+        <textarea class="copy-edit" ${post.status === 'rejected' ? 'disabled' : ''}>${escapeHtml(post.copy || '')}</textarea>
         <div class="card-actions">
           ${post.status === 'pending' ? `
-            <button class="btn btn-primary approve-btn">Autorizar e publicar</button>
+            <button class="btn btn-primary approve-btn">Autorizar</button>
+            <button class="btn btn-ghost publish-now-btn">Publicar agora</button>
             <button class="btn btn-danger reject-btn">Rejeitar</button>
+          ` : post.status === 'approved' ? `
+            <button class="btn btn-primary publish-now-btn">Publicar agora</button>
           ` : `
             <button class="btn btn-ghost" disabled>Rejeitado</button>
           `}
@@ -595,9 +608,50 @@
     `;
 
     const textarea = card.querySelector('textarea');
+    const mainImg = card.querySelector('img');
 
-    if (post.status === 'pending') {
-      card.querySelector('.approve-btn').addEventListener('click', async (e) => {
+    if (post.status === 'pending' && post.image_candidates && post.image_candidates.length > 1) {
+      card.querySelectorAll('.candidate-thumb').forEach((thumb) => {
+        thumb.addEventListener('click', async () => {
+          const idx = Number(thumb.dataset.idx);
+          const chosenUrl = post.image_candidates[idx];
+
+          mainImg.src = proxyImage(chosenUrl);
+          card.querySelectorAll('.candidate-thumb').forEach((t) => t.classList.remove('selected'));
+          thumb.classList.add('selected');
+
+          const { error } = await supabaseClient
+            .from('posts_queue')
+            .update({ image_url: chosenUrl })
+            .eq('id', post.id);
+          if (error) alert('Erro ao trocar imagem: ' + error.message);
+          post.image_url = chosenUrl; // mantém consistente se o card for reusado
+        });
+      });
+    }
+
+    // "Autorizar" — só marca como aprovado. Quem publica de verdade é o
+    // agendamento (roda sozinho nos horários fixos, 3x ao dia).
+    const approveBtn = card.querySelector('.approve-btn');
+    if (approveBtn) {
+      approveBtn.addEventListener('click', async (e) => {
+        e.target.disabled = true;
+        e.target.innerHTML = '<span class="loader"></span>';
+
+        const { error } = await supabaseClient
+          .from('posts_queue')
+          .update({ status: 'approved', copy: textarea.value })
+          .eq('id', post.id);
+        if (error) alert('Erro: ' + error.message);
+        loadQueue();
+      });
+    }
+
+    // "Publicar agora" — publica na hora, sem esperar o horário agendado.
+    // Funciona tanto em posts pendentes quanto já aprovados.
+    const publishNowBtn = card.querySelector('.publish-now-btn');
+    if (publishNowBtn) {
+      publishNowBtn.addEventListener('click', async (e) => {
         e.target.disabled = true;
         e.target.innerHTML = '<span class="loader"></span> Publicando...';
 
@@ -619,8 +673,11 @@
         if (!res.ok) alert('Erro ao publicar no Instagram: ' + data.error);
         loadQueue();
       });
+    }
 
-      card.querySelector('.reject-btn').addEventListener('click', async () => {
+    const rejectBtn = card.querySelector('.reject-btn');
+    if (rejectBtn) {
+      rejectBtn.addEventListener('click', async () => {
         const { error } = await supabaseClient
           .from('posts_queue')
           .update({ status: 'rejected' })
