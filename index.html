@@ -166,6 +166,9 @@
     font-size:12px; color:var(--text-dim); background:var(--surface-2);
     border:1px solid var(--border); border-radius:8px; padding:6px 10px;
   }
+  .schedule-note{
+    font-size:12.5px; color:var(--accent); font-weight:500;
+  }
   .linked-preview{ display:flex; align-items:center; gap:10px; }
   .linked-preview img{ width:56px; height:56px; border-radius:8px; object-fit:cover; border:2px solid var(--accent); }
   .no-candidates{ font-size:12.5px; color:var(--text-dim); font-style:italic; }
@@ -562,6 +565,33 @@
     }
   });
 
+  // Horários agendados (mesmos do cron_setup.sql): 09h, 14h, 19h (Brasília)
+  // = 12h, 17h, 22h UTC. Calcula os próximos N horários futuros, em ordem.
+  function getNextScheduleSlots(n) {
+    const hoursUTC = [12, 17, 22];
+    const now = new Date();
+    const candidates = [];
+    for (let dayOffset = 0; dayOffset < 10 && candidates.length < n + 3; dayOffset++) {
+      const base = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + dayOffset));
+      for (const h of hoursUTC) {
+        const dt = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), h, 0, 0));
+        if (dt > now) candidates.push(dt);
+      }
+    }
+    candidates.sort((a, b) => a - b);
+    return candidates.slice(0, n);
+  }
+
+  function formatScheduleTime(date) {
+    return date.toLocaleString('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
   async function loadQueue() {
     grid.innerHTML = '<div class="empty">Carregando...</div>';
     const { data, error } = await supabaseClient
@@ -582,11 +612,20 @@
       return;
     }
 
+    // Calcula o horário previsto de publicação de cada post aprovado,
+    // na mesma ordem (mais antigo primeiro) que o agendamento usa.
+    const approvedInOrder = data
+      .filter(p => p.status === 'approved')
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    const slots = getNextScheduleSlots(approvedInOrder.length);
+    const scheduleMap = {};
+    approvedInOrder.forEach((p, i) => { scheduleMap[p.id] = slots[i]; });
+
     grid.innerHTML = '';
-    data.forEach(post => grid.appendChild(renderCard(post)));
+    data.forEach(post => grid.appendChild(renderCard(post, scheduleMap[post.id])));
   }
 
-  function renderCard(post) {
+  function renderCard(post, scheduledTime) {
     const card = document.createElement('div');
     card.className = 'card';
     const statusLabel = {
@@ -605,10 +644,15 @@
       ? `<div class="carousel-note">📷 ${images.length} fotos — vai publicar em carrossel. Remova até sobrar 1 pra publicar como foto única.</div>`
       : '';
 
+    const scheduleNote = post.status === 'approved' && scheduledTime
+      ? `<div class="schedule-note">🕐 Previsão de publicação: ${formatScheduleTime(scheduledTime)}</div>`
+      : '';
+
     card.innerHTML = `
       <img src="${proxyImage(images[0])}" alt="" />
       <div class="card-body">
         <span class="pill ${post.status}">${statusLabel}</span>
+        ${scheduleNote}
         <div class="card-title">${escapeHtml(post.title)}</div>
         ${carouselNote}
         ${isEditable ? `
@@ -634,8 +678,9 @@
             <button class="btn btn-danger reject-btn">Rejeitar</button>
           ` : post.status === 'approved' ? `
             <button class="btn btn-primary publish-now-btn">Publicar agora</button>
+            <button class="btn btn-danger delete-btn">Remover da fila</button>
           ` : `
-            <button class="btn btn-ghost" disabled>Rejeitado</button>
+            <button class="btn btn-danger delete-btn">Excluir</button>
           `}
         </div>
       </div>
@@ -739,6 +784,25 @@
           .update({ status: 'rejected' })
           .eq('id', post.id);
         if (error) alert('Erro: ' + error.message);
+        loadQueue();
+      });
+    }
+
+    // "Remover da fila" (aprovados) / "Excluir" (rejeitados) — apaga o
+    // registro de vez do banco, pra não ficar guardando espaço à toa.
+    const deleteBtn = card.querySelector('.delete-btn');
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', async () => {
+        const confirmMsg = post.status === 'approved'
+          ? 'Remover este post da fila? Ele NÃO será publicado.'
+          : 'Excluir este post rejeitado de vez?';
+        if (!confirm(confirmMsg)) return;
+
+        const { error } = await supabaseClient
+          .from('posts_queue')
+          .delete()
+          .eq('id', post.id);
+        if (error) alert('Erro ao excluir: ' + error.message);
         loadQueue();
       });
     }
