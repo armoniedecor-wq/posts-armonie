@@ -541,20 +541,32 @@
       ? `${imp.specs_found} especificação(ões) real(is) encontrada(s) e usada(s) na descrição.`
       : `Nenhuma especificação técnica encontrada — a descrição não inclui essa seção (pra não inventar dados).`;
 
+    const images = imp.images;
+
     importReview.innerHTML = `
       <div class="add-card" style="text-align:left;">
         <div class="pill pending" style="margin-bottom:10px;">Aguardando aprovação</div>
         <h3 style="font-family:'Space Grotesk'; font-size:15px; margin:0 0 10px;">${escapeHtml(imp.title)}</h3>
 
-        <div class="candidates" style="margin-bottom:14px;">
-          ${imp.images.map((url) => `<img class="candidate-thumb" src="${url}" style="width:72px;height:72px;" />`).join('')}
-        </div>
+        <div style="font-size:13px; color:var(--text-dim); margin-bottom:6px;">Fotos (remova ou reordene antes de aprovar):</div>
+        <div class="candidates" id="import-manage-images" style="margin-bottom:14px;">${images.map((url, i) =>
+          `<div class="manage-thumb-wrap">
+             <img class="candidate-thumb" src="${url}" style="width:72px;height:72px;" title="Foto ${i + 1}" />
+             ${images.length > 1 ? `
+               <div class="manage-thumb-controls">
+                 <button class="thumb-btn import-move-left-btn" data-idx="${i}" ${i === 0 ? 'disabled' : ''} title="Mover pra esquerda">‹</button>
+                 <button class="thumb-btn import-remove-btn" data-idx="${i}" title="Remover esta foto">✕</button>
+                 <button class="thumb-btn import-move-right-btn" data-idx="${i}" ${i === images.length - 1 ? 'disabled' : ''} title="Mover pra direita">›</button>
+               </div>
+             ` : ''}
+           </div>`
+        ).join('')}</div>
 
         <div style="font-size:13px; color:var(--text-dim); margin-bottom:6px;">${priceInfo}</div>
         <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">${specsInfo}</div>
 
         <div style="font-size:13px; color:var(--text-dim); margin-bottom:6px;">Descrição gerada (copy):</div>
-        <div class="description-preview">${imp.body_html}</div>
+        <div class="description-preview" id="import-description-preview">${imp.body_html}</div>
 
         <div class="card-actions" style="margin-top:16px;">
           <button class="btn btn-primary approve-import-btn">Aprovar e criar na Shopify</button>
@@ -565,6 +577,51 @@
     `;
 
     const reviewStatus = importReview.querySelector('#import-review-status');
+    const descriptionPreview = importReview.querySelector('#import-description-preview');
+
+    async function updateImportImages(newImages) {
+      const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ action: 'update_images', import_id: imp.id, images: newImages }),
+      });
+      const data = await res.json();
+      if (!res.ok) { alert('Erro ao atualizar fotos: ' + data.error); return; }
+      renderImportReview(data.import); // re-renderiza com a lista/descrição atualizadas
+    }
+
+    if (images.length > 0) {
+      importReview.querySelectorAll('.import-remove-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          if (images.length <= 1) return; // nunca remove a última
+          const idx = Number(btn.dataset.idx);
+          updateImportImages(images.filter((_, i) => i !== idx));
+        });
+      });
+
+      importReview.querySelectorAll('.import-move-left-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const idx = Number(btn.dataset.idx);
+          if (idx === 0) return;
+          const newImages = [...images];
+          [newImages[idx - 1], newImages[idx]] = [newImages[idx], newImages[idx - 1]];
+          updateImportImages(newImages);
+        });
+      });
+
+      importReview.querySelectorAll('.import-move-right-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const idx = Number(btn.dataset.idx);
+          if (idx === images.length - 1) return;
+          const newImages = [...images];
+          [newImages[idx + 1], newImages[idx]] = [newImages[idx], newImages[idx + 1]];
+          updateImportImages(newImages);
+        });
+      });
+    }
 
     importReview.querySelector('.approve-import-btn').addEventListener('click', async (e) => {
       e.target.disabled = true;
