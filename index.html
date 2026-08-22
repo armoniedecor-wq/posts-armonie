@@ -513,10 +513,14 @@
       const priceInfo = data.price_found
         ? `Preço de custo: R$ ${data.cost_price.toFixed(2)} → Preço de venda: R$ ${data.price.toFixed(2)}`
         : `⚠ Não achei o preço na página — o produto foi criado com R$ 0,00, ajuste manualmente na Shopify.`;
+      const specsInfo = data.specs_found > 0
+        ? `${data.specs_found} especificação(ões) real(is) encontrada(s) e usada(s) na descrição.`
+        : `Nenhuma especificação técnica encontrada na página — a descrição não inclui essa seção (pra não inventar dados).`;
       importPreview.innerHTML = `
         <div class="meta">
           <strong>${escapeHtml(data.title)}</strong>
           <div style="margin-top:6px;">${priceInfo}</div>
+          <div style="margin-top:4px; font-size:12px; color:var(--text-dim);">${specsInfo}</div>
           <div style="margin-top:6px;"><a href="${data.admin_url}" target="_blank" style="color:var(--accent);">Abrir na Shopify →</a></div>
         </div>
       `;
