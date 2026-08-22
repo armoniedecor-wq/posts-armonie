@@ -510,10 +510,13 @@
       importStatus.textContent = 'Produto criado como rascunho na Shopify!';
       importStatus.classList.add('ok');
       importPreview.style.display = 'flex';
+      const priceInfo = data.price_found
+        ? `Preço de custo: R$ ${data.cost_price.toFixed(2)} → Preço de venda: R$ ${data.price.toFixed(2)}`
+        : `⚠ Não achei o preço na página — o produto foi criado com R$ 0,00, ajuste manualmente na Shopify.`;
       importPreview.innerHTML = `
         <div class="meta">
           <strong>${escapeHtml(data.title)}</strong>
-          <div style="margin-top:6px;">Preço de custo: R$ ${data.cost_price.toFixed(2)} → Preço de venda: R$ ${data.price.toFixed(2)}</div>
+          <div style="margin-top:6px;">${priceInfo}</div>
           <div style="margin-top:6px;"><a href="${data.admin_url}" target="_blank" style="color:var(--accent);">Abrir na Shopify →</a></div>
         </div>
       `;
