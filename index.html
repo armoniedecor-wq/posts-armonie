@@ -169,6 +169,16 @@
   .schedule-note{
     font-size:12.5px; color:var(--accent); font-weight:500;
   }
+  .description-preview{
+    background:var(--surface-2); border:1px solid var(--border); border-radius:10px;
+    padding:14px 16px; font-size:13px; line-height:1.6; color:var(--text);
+    max-height:400px; overflow-y:auto;
+  }
+  .description-preview h2{ font-size:14px; margin:14px 0 6px; color:var(--text); }
+  .description-preview h2:first-child{ margin-top:0; }
+  .description-preview p{ margin:0 0 8px; }
+  .description-preview ul{ margin:0 0 8px; padding-left:20px; }
+  .description-preview img{ max-width:100%; border-radius:8px; margin:6px 0; }
   .linked-preview{ display:flex; align-items:center; gap:10px; }
   .linked-preview img{ width:56px; height:56px; border-radius:8px; object-fit:cover; border:2px solid var(--accent); }
   .no-candidates{ font-size:12.5px; color:var(--text-dim); font-style:italic; }
@@ -228,14 +238,15 @@
   <section class="panel" id="panel-import">
     <div class="add-card">
       <h2 style="font-family:'Space Grotesk';font-size:16px;margin:0;">Importar produto do AliExpress pra Shopify</h2>
-      <p class="lead">Cria o produto como rascunho, com preço já calculado (custo x 2,2, arredondado pra ,90).</p>
+      <p class="lead">Busca fotos, preço e descrição pra você revisar antes de criar o produto de verdade.</p>
       <div class="url-row">
         <input type="url" id="import-url" placeholder="https://pt.aliexpress.com/item/..." />
-        <button class="btn btn-primary" id="import-btn">Importar</button>
+        <button class="btn btn-primary" id="import-btn">Buscar</button>
       </div>
       <div class="status-msg" id="import-status"></div>
-      <div class="preview" id="import-preview" style="display:none;"></div>
     </div>
+
+    <div id="import-review" style="display:none; margin-top:20px;"></div>
   </section>
 
   <!-- FILA DE VALIDAÇÃO -->
@@ -483,17 +494,17 @@
   const importUrlInput = document.getElementById('import-url');
   const importBtn = document.getElementById('import-btn');
   const importStatus = document.getElementById('import-status');
-  const importPreview = document.getElementById('import-preview');
+  const importReview = document.getElementById('import-review');
 
   importBtn.addEventListener('click', async () => {
     const url = importUrlInput.value.trim();
     if (!url) return;
 
     importBtn.disabled = true;
-    importBtn.innerHTML = '<span class="loader"></span> Importando...';
+    importBtn.innerHTML = '<span class="loader"></span> Buscando...';
     importStatus.textContent = '';
     importStatus.className = 'status-msg';
-    importPreview.style.display = 'none';
+    importReview.style.display = 'none';
 
     try {
       const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
@@ -502,37 +513,99 @@
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
         },
-        body: JSON.stringify({ product_url: url }),
+        body: JSON.stringify({ action: 'prepare', product_url: url }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
 
-      importStatus.textContent = 'Produto criado como rascunho na Shopify!';
+      importStatus.textContent = 'Encontrado! Revise abaixo antes de aprovar.';
       importStatus.classList.add('ok');
-      importPreview.style.display = 'flex';
-      const priceInfo = data.price_found
-        ? `Preço de custo: R$ ${data.cost_price.toFixed(2)} → Preço de venda: R$ ${data.price.toFixed(2)}`
-        : `⚠ Não achei o preço na página — o produto foi criado com R$ 0,00, ajuste manualmente na Shopify.`;
-      const specsInfo = data.specs_found > 0
-        ? `${data.specs_found} especificação(ões) real(is) encontrada(s) e usada(s) na descrição.`
-        : `Nenhuma especificação técnica encontrada na página — a descrição não inclui essa seção (pra não inventar dados).`;
-      importPreview.innerHTML = `
-        <div class="meta">
-          <strong>${escapeHtml(data.title)}</strong>
-          <div style="margin-top:6px;">${priceInfo}</div>
-          <div style="margin-top:4px; font-size:12px; color:var(--text-dim);">${specsInfo}</div>
-          <div style="margin-top:6px;"><a href="${data.admin_url}" target="_blank" style="color:var(--accent);">Abrir na Shopify →</a></div>
-        </div>
-      `;
+      renderImportReview(data.import);
       importUrlInput.value = '';
     } catch (err) {
       importStatus.textContent = err.message;
       importStatus.classList.add('err');
     } finally {
       importBtn.disabled = false;
-      importBtn.textContent = 'Importar';
+      importBtn.textContent = 'Buscar';
     }
   });
+
+  function renderImportReview(imp) {
+    importReview.style.display = 'block';
+
+    const priceInfo = imp.price_found
+      ? `Preço de custo: R$ ${Number(imp.cost_price).toFixed(2)} → Preço de venda: R$ ${Number(imp.sale_price).toFixed(2)}`
+      : `⚠ Não achei o preço na página — vai entrar como R$ 0,00, ajuste manualmente na Shopify depois.`;
+    const specsInfo = imp.specs_found > 0
+      ? `${imp.specs_found} especificação(ões) real(is) encontrada(s) e usada(s) na descrição.`
+      : `Nenhuma especificação técnica encontrada — a descrição não inclui essa seção (pra não inventar dados).`;
+
+    importReview.innerHTML = `
+      <div class="add-card" style="text-align:left;">
+        <div class="pill pending" style="margin-bottom:10px;">Aguardando aprovação</div>
+        <h3 style="font-family:'Space Grotesk'; font-size:15px; margin:0 0 10px;">${escapeHtml(imp.title)}</h3>
+
+        <div class="candidates" style="margin-bottom:14px;">
+          ${imp.images.map((url) => `<img class="candidate-thumb" src="${url}" style="width:72px;height:72px;" />`).join('')}
+        </div>
+
+        <div style="font-size:13px; color:var(--text-dim); margin-bottom:6px;">${priceInfo}</div>
+        <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">${specsInfo}</div>
+
+        <div style="font-size:13px; color:var(--text-dim); margin-bottom:6px;">Descrição gerada (copy):</div>
+        <div class="description-preview">${imp.body_html}</div>
+
+        <div class="card-actions" style="margin-top:16px;">
+          <button class="btn btn-primary approve-import-btn">Aprovar e criar na Shopify</button>
+          <button class="btn btn-danger reject-import-btn">Descartar</button>
+        </div>
+        <div class="status-msg" id="import-review-status"></div>
+      </div>
+    `;
+
+    const reviewStatus = importReview.querySelector('#import-review-status');
+
+    importReview.querySelector('.approve-import-btn').addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      e.target.innerHTML = '<span class="loader"></span> Criando na Shopify...';
+      try {
+        const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({ action: 'create', import_id: imp.id }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
+
+        reviewStatus.textContent = 'Produto criado como rascunho na Shopify!';
+        reviewStatus.classList.add('ok');
+        e.target.textContent = 'Criado ✓';
+        importReview.querySelector('.reject-import-btn').style.display = 'none';
+        reviewStatus.innerHTML += `<br><a href="${data.admin_url}" target="_blank" style="color:var(--accent);">Abrir na Shopify →</a>`;
+      } catch (err) {
+        reviewStatus.textContent = err.message;
+        reviewStatus.classList.add('err');
+        e.target.disabled = false;
+        e.target.textContent = 'Aprovar e criar na Shopify';
+      }
+    });
+
+    importReview.querySelector('.reject-import-btn').addEventListener('click', async () => {
+      await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ action: 'reject', import_id: imp.id }),
+      });
+      importReview.style.display = 'none';
+    });
+  }
 
   // --- Fila de validação ---
   const grid = document.getElementById('queue-grid');
