@@ -611,7 +611,12 @@
     importReview.innerHTML = `
       <div class="add-card" style="text-align:left;">
         <div class="pill pending" style="margin-bottom:10px;">Aguardando aprovação</div>
-        <h3 style="font-family:'Space Grotesk'; font-size:15px; margin:0 0 10px;">${escapeHtml(imp.title)}</h3>
+
+        <div style="font-size:13px; color:var(--text-dim); margin-bottom:6px;">Título do produto:</div>
+        <div style="display:flex; gap:8px; margin-bottom:14px;">
+          <input type="text" id="import-title-input" value="${escapeHtml(imp.title)}" style="flex:1; font-family:'Space Grotesk'; font-size:15px;" />
+          <button class="btn" id="import-title-save-btn">Salvar título</button>
+        </div>
 
         <div style="font-size:13px; color:var(--text-dim); margin-bottom:6px;">Fotos (remova ou reordene antes de aprovar):</div>
         <div class="candidates" id="import-manage-images" style="margin-bottom:14px;">${images.map((url, i) =>
@@ -643,6 +648,34 @@
 
     const reviewStatus = importReview.querySelector('#import-review-status');
     const descriptionPreview = importReview.querySelector('#import-description-preview');
+    const titleInput = importReview.querySelector('#import-title-input');
+    const titleSaveBtn = importReview.querySelector('#import-title-save-btn');
+
+    titleSaveBtn.addEventListener('click', async () => {
+      const newTitle = titleInput.value.trim();
+      if (!newTitle) { alert('O título não pode ficar vazio.'); return; }
+      if (newTitle === imp.title) return;
+
+      titleSaveBtn.disabled = true;
+      titleSaveBtn.innerHTML = '<span class="loader"></span>';
+      try {
+        const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({ action: 'update_title', import_id: imp.id, title: newTitle }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
+        renderImportReview(data.import); // re-renderiza com título/descrição atualizados
+      } catch (err) {
+        alert('Erro ao salvar título: ' + err.message);
+        titleSaveBtn.disabled = false;
+        titleSaveBtn.textContent = 'Salvar título';
+      }
+    });
 
     async function updateImportImages(newImages) {
       const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
