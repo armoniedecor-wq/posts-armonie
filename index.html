@@ -252,14 +252,15 @@
         <textarea id="batch-import-urls" rows="5" placeholder="https://pt.aliexpress.com/item/...&#10;https://pt.aliexpress.com/item/..." style="margin-bottom:8px; width:100%; font-family:inherit; font-size:13px; padding:10px; border-radius:8px; border:1px solid var(--border); background:var(--bg-input,transparent); color:inherit;"></textarea>
         <button class="btn btn-primary" id="batch-import-btn">Importar todos</button>
         <div class="status-msg" id="batch-import-status" style="white-space:pre-line;"></div>
+        <div id="shopee-cards" style="margin-top:12px; display:flex; flex-direction:column; gap:12px;"></div>
       </details>
 
       <div id="import-manual-fields" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--border);">
         <p class="lead" style="margin-bottom:10px;">
           A Shopee bloqueia a busca automática. Copie manualmente da página do produto:
-          o <strong>título</strong>, e as <strong>imagens</strong> (clique direito em cada foto → "Copiar endereço da imagem", uma URL por linha).
+          as <strong>imagens</strong> (o título é tirado do próprio link) (clique direito em cada foto → "Copiar endereço da imagem", uma URL por linha).
         </p>
-        <input type="text" id="import-manual-title" placeholder="Título do produto (copiado da página)" style="margin-bottom:8px;" />
+        <input type="hidden" id="import-manual-title" />
         <textarea id="import-manual-images" rows="4" placeholder="Cole aqui uma URL de imagem por linha" style="margin-bottom:8px; width:100%; font-family:inherit; font-size:13px; padding:10px; border-radius:8px; border:1px solid var(--border); background:var(--bg-input,transparent); color:inherit;"></textarea>
         <input type="number" step="0.01" id="import-manual-price" placeholder="Preço de custo (opcional, ex: 49.90)" style="margin-bottom:10px;" />
         <button class="btn btn-primary" id="import-manual-btn">Gerar com esses dados</button>
@@ -630,31 +631,77 @@
   }
 
   const shopeeQueue = [];
+  const shopeeCards = document.getElementById('shopee-cards');
   function shortUrl(u) {
     try { const x = new URL(u); return decodeURIComponent(x.pathname).slice(0, 70); } catch { return u.slice(0, 70); }
   }
-  // Puxa o próximo link da Shopee da fila pro modo manual.
-  function nextShopeeManual() {
-    if (!shopeeQueue.length) return;
-    importUrlInput.value = shopeeQueue.shift();
-    importManualFields.style.display = 'block';
-    importManualTitle.focus();
-    importStatus.className = 'status-msg ok';
-    importStatus.textContent = `Shopee (modo manual): preencha título e imagens deste produto. Faltam ${shopeeQueue.length} na fila.`;
-    importManualFields.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // O link da Shopee já traz o nome do produto: .../Jarra-De-Vidro-1-8-Litros-i.123.456
+  function titleFromUrl(u) {
+    try {
+      const seg = decodeURIComponent(new URL(u).pathname.split('/').filter(Boolean).pop() || '');
+      return seg.replace(/-i\.\d+\.\d+$/i, '').replace(/-/g, ' ').replace(/\s+/g, ' ').trim();
+    } catch { return ''; }
   }
+  const cardInputStyle = 'width:100%; font-family:inherit; font-size:13px; padding:10px; border-radius:8px; border:1px solid var(--border); background:var(--bg-input,transparent); color:inherit; box-sizing:border-box;';
+
+  // Um cartão por produto da Shopee: só links das imagens + preço de custo.
+  function renderShopeeCards() {
+    shopeeCards.innerHTML = shopeeQueue.map((url, i) => `
+      <div class="shopee-card" data-i="${i}" style="border:1px solid var(--border); border-radius:10px; padding:12px;">
+        <div style="font-size:13px; font-weight:600; margin-bottom:8px;">${escapeHtml(titleFromUrl(url) || shortUrl(url))}</div>
+        <div style="display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap;">
+          <textarea class="sc-images" rows="3" placeholder="Links das imagens (um por linha)" style="${cardInputStyle} flex:3; min-width:220px;"></textarea>
+          <input type="text" inputmode="decimal" class="sc-price" placeholder="Custo (R$)" style="${cardInputStyle} flex:1; min-width:100px;" />
+          <button class="btn btn-primary sc-go">Gerar</button>
+        </div>
+        <div class="sc-status status-msg"></div>
+      </div>`).join('');
+
+    shopeeCards.querySelectorAll('.shopee-card').forEach((card) => {
+      const url = shopeeQueue[Number(card.dataset.i)];
+      const go = card.querySelector('.sc-go');
+      const st = card.querySelector('.sc-status');
+      go.addEventListener('click', async () => {
+        const images = card.querySelector('.sc-images').value.split('\n').map((x) => x.trim()).filter(Boolean);
+        const priceRaw = card.querySelector('.sc-price').value.trim().replace(',', '.');
+        const price = priceRaw ? parseFloat(priceRaw) : null;
+        if (!images.length) { st.className = 'sc-status status-msg err'; st.textContent = 'Cole pelo menos um link de imagem.'; return; }
+        go.disabled = true;
+        go.innerHTML = '<span class="loader"></span>';
+        st.className = 'sc-status status-msg';
+        st.textContent = '';
+        try {
+          await postImport({ action: 'prepare', product_url: url, manual_title: titleFromUrl(url) || 'Produto', manual_images: images, manual_price: Number.isFinite(price) ? price : null });
+          card.style.opacity = '0.6';
+          card.querySelectorAll('textarea,input').forEach((el) => { el.disabled = true; });
+          go.textContent = 'Enviado ✓';
+          st.className = 'sc-status status-msg ok';
+          st.textContent = 'Foi pra "Aguardando revisão". Lá você edita o título, se quiser.';
+          loadPendingImports();
+        } catch (err) {
+          st.className = 'sc-status status-msg err';
+          st.textContent = err.message;
+          go.disabled = false;
+          go.textContent = 'Gerar';
+        }
+      });
+    });
+  }
+  function nextShopeeManual() { if (shopeeQueue.length) renderShopeeCards(); }
 
   batchImportBtn.addEventListener('click', async () => {
     const urls = [...new Set(batchImportUrls.value.split('\n').map((s) => s.trim()).filter(Boolean))];
     if (!urls.length) return;
     batchImportBtn.disabled = true;
+    shopeeQueue.length = 0;
+    shopeeCards.innerHTML = '';
     const lines = [];
     let ok = 0;
     for (let i = 0; i < urls.length; i++) {
       const url = urls[i];
       batchImportStatus.className = 'status-msg';
       batchImportStatus.textContent = `Processando ${i + 1} de ${urls.length}...\n` + lines.join('\n');
-      if (isShopeeLink(url)) { shopeeQueue.push(url); lines.push(`⏭ Shopee → vai pro modo manual: ${shortUrl(url)}`); continue; }
+      if (isShopeeLink(url)) { shopeeQueue.push(url); lines.push(`⏭ Shopee (preencher abaixo): ${shortUrl(url)}`); continue; }
       try {
         await postImport({ action: 'prepare', product_url: url });
         ok++;
@@ -666,7 +713,7 @@
     batchImportBtn.disabled = false;
     batchImportStatus.className = 'status-msg ' + (ok || shopeeQueue.length ? 'ok' : 'err');
     batchImportStatus.textContent = `${ok} importados automaticamente. ` +
-      (shopeeQueue.length ? `${shopeeQueue.length} da Shopee aguardam o modo manual (abaixo).` : 'Revise na lista "Aguardando revisão".') + '\n' + lines.join('\n');
+      (shopeeQueue.length ? `${shopeeQueue.length} da Shopee: cole as imagens e o custo em cada produto abaixo.` : 'Revise na lista "Aguardando revisão".') + '\n' + lines.join('\n');
     batchImportUrls.value = '';
     loadPendingImports();
     nextShopeeManual();
@@ -702,11 +749,10 @@
     const price = priceRaw ? parseFloat(priceRaw.replace(',', '.')) : null;
 
     if (!url) { importStatus.textContent = 'Cole o link do produto no campo acima primeiro.'; importStatus.className = 'status-msg err'; return; }
-    if (!title) { importStatus.textContent = 'Cole o título do produto.'; importStatus.className = 'status-msg err'; return; }
     if (!images.length) { importStatus.textContent = 'Cole pelo menos uma URL de imagem.'; importStatus.className = 'status-msg err'; return; }
 
     await runImportPrepare(
-      { action: 'prepare', product_url: url, manual_title: title, manual_images: images, manual_price: price },
+      { action: 'prepare', product_url: url, manual_title: title || titleFromUrl(url) || 'Produto', manual_images: images, manual_price: price },
       importManualBtn,
       'Gerar com esses dados'
     );
