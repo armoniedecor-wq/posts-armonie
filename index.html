@@ -600,8 +600,9 @@
     importReview.style.display = 'block';
 
     const priceInfo = imp.price_found
-      ? `Preço de custo: R$ ${Number(imp.cost_price).toFixed(2)} → Preço de venda: R$ ${Number(imp.sale_price).toFixed(2)}`
-      : `⚠ Não achei o preço na página — vai entrar como R$ 0,00, ajuste manualmente na Shopify depois.`;
+      ? `Preço de custo: R$ ${Number(imp.cost_price).toFixed(2)} (o preço de venda sugerido foi calculado em cima dele — você pode alterar abaixo)`
+      : `⚠ Não achei o preço de custo na página — informe o preço de venda abaixo (se ficar vazio, entra como R$ 0,00).`;
+    const salePriceValue = imp.sale_price != null && Number(imp.sale_price) > 0 ? Number(imp.sale_price).toFixed(2) : '';
     const specsInfo = imp.specs_found > 0
       ? `${imp.specs_found} especificação(ões) real(is) encontrada(s) e usada(s) na descrição.`
       : `Nenhuma especificação técnica encontrada — a descrição não inclui essa seção (pra não inventar dados).`;
@@ -632,7 +633,21 @@
            </div>`
         ).join('')}</div>
 
+        <div style="margin-bottom:14px; padding:12px; border:1px dashed var(--border); border-radius:10px;">
+          <div style="font-size:13px; color:var(--text-dim); margin-bottom:8px;">
+            Imagens com IA: gera 5 fotos de ambiente (ângulos diferentes, mesma luz) + 1 imagem de medidas em fundo branco, a partir das fotos acima, em WebP de até 100 KB, e <strong>substitui</strong> as fotos atuais. Remova antes as fotos ruins (✕) pra IA usar só as boas como referência.
+          </div>
+          <input type="text" id="import-dimensions-input" placeholder="Medidas do produto (opcional) — ex: 60 x 40 x 25 cm" style="margin-bottom:8px;" />
+          <button class="btn btn-primary" id="import-generate-images-btn">Gerar 6 imagens com IA</button>
+          <div class="status-msg" id="import-generate-status"></div>
+        </div>
+
         <div style="font-size:13px; color:var(--text-dim); margin-bottom:6px;">${priceInfo}</div>
+        <div style="font-size:13px; color:var(--text-dim); margin-bottom:6px;">Preço de venda (R$):</div>
+        <div style="display:flex; gap:8px; margin-bottom:14px;">
+          <input type="number" step="0.01" min="0" id="import-price-input" value="${salePriceValue}" placeholder="ex: 189.90" style="flex:1;" />
+          <button class="btn" id="import-price-save-btn">Salvar preço</button>
+        </div>
         <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">${specsInfo}</div>
 
         <div style="font-size:13px; color:var(--text-dim); margin-bottom:6px;">Descrição gerada (copy):</div>
@@ -648,6 +663,79 @@
 
     const reviewStatus = importReview.querySelector('#import-review-status');
     const descriptionPreview = importReview.querySelector('#import-description-preview');
+    const generateBtn = importReview.querySelector('#import-generate-images-btn');
+    const generateStatus = importReview.querySelector('#import-generate-status');
+    const dimensionsInput = importReview.querySelector('#import-dimensions-input');
+
+    generateBtn.addEventListener('click', async () => {
+      generateBtn.disabled = true;
+      generateBtn.innerHTML = '<span class="loader"></span> Gerando (leva cerca de 1 minuto)...';
+      generateStatus.textContent = '';
+      generateStatus.className = 'status-msg';
+      try {
+        const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({
+            action: 'generate_images',
+            import_id: imp.id,
+            dimensions: dimensionsInput.value.trim(),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
+
+        renderImportReview(data.import);
+        if (data.failures && data.failures.length) {
+          const st = importReview.querySelector('#import-generate-status');
+          st.textContent = `${data.generated} imagem(ns) geradas. Avisos: ${data.failures.join(' | ')}`;
+          st.classList.add('err');
+        }
+      } catch (err) {
+        generateStatus.textContent = err.message;
+        generateStatus.classList.add('err');
+        generateBtn.disabled = false;
+        generateBtn.textContent = 'Gerar 6 imagens com IA';
+      }
+    });
+
+    const priceInput = importReview.querySelector('#import-price-input');
+    const priceSaveBtn = importReview.querySelector('#import-price-save-btn');
+
+    function readPriceInput() {
+      const raw = priceInput.value.trim().replace(',', '.');
+      const num = parseFloat(raw);
+      return Number.isFinite(num) && num > 0 ? num : null;
+    }
+
+    priceSaveBtn.addEventListener('click', async () => {
+      const newPrice = readPriceInput();
+      if (newPrice === null) { alert('Digite um preço de venda maior que zero.'); return; }
+
+      priceSaveBtn.disabled = true;
+      priceSaveBtn.innerHTML = '<span class="loader"></span>';
+      try {
+        const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({ action: 'update_price', import_id: imp.id, sale_price: newPrice }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
+        renderImportReview(data.import);
+      } catch (err) {
+        alert('Erro ao salvar preço: ' + err.message);
+        priceSaveBtn.disabled = false;
+        priceSaveBtn.textContent = 'Salvar preço';
+      }
+    });
+
     const titleInput = importReview.querySelector('#import-title-input');
     const titleSaveBtn = importReview.querySelector('#import-title-save-btn');
 
@@ -725,6 +813,34 @@
       e.target.disabled = true;
       e.target.innerHTML = '<span class="loader"></span> Criando na Shopify...';
       try {
+        // Se você alterou o título ou o preço e não clicou em "Salvar",
+        // salva agora, antes de criar o produto.
+        const saveHeaders = {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        };
+        const pendingTitle = titleInput.value.trim();
+        if (pendingTitle && pendingTitle !== imp.title) {
+          const r = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
+            method: 'POST',
+            headers: saveHeaders,
+            body: JSON.stringify({ action: 'update_title', import_id: imp.id, title: pendingTitle }),
+          });
+          const d = await r.json();
+          if (!r.ok) throw new Error('Não consegui salvar o título: ' + (d.error || 'erro desconhecido'));
+        }
+        const pendingPrice = readPriceInput();
+        const savedPrice = imp.sale_price != null ? Number(imp.sale_price) : null;
+        if (pendingPrice !== null && pendingPrice !== savedPrice) {
+          const r = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
+            method: 'POST',
+            headers: saveHeaders,
+            body: JSON.stringify({ action: 'update_price', import_id: imp.id, sale_price: pendingPrice }),
+          });
+          const d = await r.json();
+          if (!r.ok) throw new Error('Não consegui salvar o preço: ' + (d.error || 'erro desconhecido'));
+        }
+
         const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
           method: 'POST',
           headers: {
