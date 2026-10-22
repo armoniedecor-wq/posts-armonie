@@ -246,6 +246,14 @@
       </div>
       <div class="status-msg" id="import-status"></div>
 
+      <details style="margin-top:14px;">
+        <summary style="cursor:pointer; font-size:13px; color:var(--text-dim);">Importar vários links de uma vez (AliExpress)</summary>
+        <p class="lead" style="margin:10px 0;">Um link por linha. Cada produto vira um rascunho em "Aguardando revisão" — você revisa e aprova um por um. Links da Shopee não funcionam em lote (use o campo acima, no modo manual).</p>
+        <textarea id="batch-import-urls" rows="5" placeholder="https://pt.aliexpress.com/item/...&#10;https://pt.aliexpress.com/item/..." style="margin-bottom:8px; width:100%; font-family:inherit; font-size:13px; padding:10px; border-radius:8px; border:1px solid var(--border); background:var(--bg-input,transparent); color:inherit;"></textarea>
+        <button class="btn btn-primary" id="batch-import-btn">Importar todos</button>
+        <div class="status-msg" id="batch-import-status" style="white-space:pre-line;"></div>
+      </details>
+
       <div id="import-manual-fields" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--border);">
         <p class="lead" style="margin-bottom:10px;">
           A Shopee bloqueia a busca automática. Copie manualmente da página do produto:
@@ -259,6 +267,11 @@
     </div>
 
     <div id="import-review" style="display:none; margin-top:20px;"></div>
+
+    <div class="add-card" style="margin-top:20px;">
+      <h2 style="font-family:'Space Grotesk';font-size:16px;margin:0;">Aguardando revisão <span id="pending-count" style="color:var(--text-dim); font-weight:400;"></span></h2>
+      <div id="pending-list" style="margin-top:10px;"></div>
+    </div>
   </section>
 
   <!-- FILA DE VALIDAÇÃO -->
@@ -543,6 +556,7 @@
       importStatus.textContent = 'Encontrado! Revise abaixo antes de aprovar.';
       importStatus.classList.add('ok');
       renderImportReview(data.import);
+      loadPendingImports();
     } catch (err) {
       importStatus.textContent = err.message;
       importStatus.classList.add('err');
@@ -551,6 +565,97 @@
       btn.textContent = originalLabel;
     }
   }
+
+  // ---------- Lista "Aguardando revisão" + importação em lote ----------
+  const pendingList = document.getElementById('pending-list');
+  const pendingCount = document.getElementById('pending-count');
+  const batchImportBtn = document.getElementById('batch-import-btn');
+  const batchImportUrls = document.getElementById('batch-import-urls');
+  const batchImportStatus = document.getElementById('batch-import-status');
+
+  async function postImport(payload) {
+    const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
+    return data;
+  }
+
+  async function loadPendingImports() {
+    try {
+      const { imports } = await postImport({ action: 'list_pending' });
+      pendingCount.textContent = imports.length ? `(${imports.length})` : '';
+      if (!imports.length) {
+        pendingList.innerHTML = '<div style="font-size:13px; color:var(--text-dim);">Nada aguardando.</div>';
+        return;
+      }
+      pendingList.innerHTML = imports.map((it) => {
+        const thumb = (it.images && it.images[0]) ? it.images[0] : '';
+        const price = it.sale_price != null ? `R$ ${Number(it.sale_price).toFixed(2).replace('.', ',')}` : 'sem preço';
+        return `
+          <div class="pending-row" data-id="${escapeHtml(it.id)}" style="display:flex; gap:10px; align-items:center; padding:8px 0; border-top:1px solid var(--border);">
+            ${thumb ? `<img src="${escapeHtml(thumb)}" referrerpolicy="no-referrer" style="width:44px; height:44px; object-fit:cover; border-radius:6px;" />` : ''}
+            <div style="flex:1; min-width:0;">
+              <div style="font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(it.title || '(sem título)')}</div>
+              <div style="font-size:12px; color:var(--text-dim);">${price}</div>
+            </div>
+            <button class="btn pending-open-btn">Revisar</button>
+            <button class="btn btn-danger pending-reject-btn">Descartar</button>
+          </div>`;
+      }).join('');
+
+      const byId = new Map(imports.map((it) => [String(it.id), it]));
+      pendingList.querySelectorAll('.pending-open-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const id = btn.closest('.pending-row').dataset.id;
+          renderImportReview(byId.get(id));
+          importReview.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      });
+      pendingList.querySelectorAll('.pending-reject-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const id = btn.closest('.pending-row').dataset.id;
+          if (!confirm('Descartar esse produto?')) return;
+          btn.disabled = true;
+          try { await postImport({ action: 'reject', import_id: id }); } catch (err) { alert(err.message); }
+          loadPendingImports();
+        });
+      });
+    } catch (err) {
+      pendingList.innerHTML = `<div class="status-msg err">Não consegui carregar a lista: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  batchImportBtn.addEventListener('click', async () => {
+    const urls = [...new Set(batchImportUrls.value.split('\n').map((s) => s.trim()).filter(Boolean))];
+    if (!urls.length) return;
+    batchImportBtn.disabled = true;
+    const lines = [];
+    let ok = 0;
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i];
+      batchImportStatus.className = 'status-msg';
+      batchImportStatus.textContent = `Processando ${i + 1} de ${urls.length}...\n` + lines.join('\n');
+      if (isShopeeLink(url)) { lines.push(`⚠ Shopee (use o modo manual): ${url}`); continue; }
+      try {
+        await postImport({ action: 'prepare', product_url: url });
+        ok++;
+        lines.push(`✓ ${url}`);
+      } catch (err) {
+        lines.push(`✗ ${url} — ${err.message}`);
+      }
+    }
+    batchImportBtn.disabled = false;
+    batchImportStatus.className = 'status-msg ' + (ok ? 'ok' : 'err');
+    batchImportStatus.textContent = `${ok} de ${urls.length} importados. Revise na lista "Aguardando revisão".\n` + lines.join('\n');
+    batchImportUrls.value = '';
+    loadPendingImports();
+  });
+
+  loadPendingImports();
 
   importBtn.addEventListener('click', async () => {
     const url = importUrlInput.value.trim();
@@ -609,6 +714,16 @@
 
     const images = imp.images;
 
+    const seoc = imp.seo_content || {};
+    const compareAtValue = seoc.compareAtPrice != null && Number(seoc.compareAtPrice) > 0 ? Number(seoc.compareAtPrice).toFixed(2) : '';
+    const dimensionsValue = seoc.dimensions || '';
+    const editorSections = Array.isArray(seoc.sections) ? seoc.sections : [];
+    // As dimensões têm campo próprio — não aparecem de novo na lista de especificações do editor.
+    const specsForEditor = (seoc.specifications || []).filter((l) => !/^dimens[õo]es?\s*:/i.test(String(l).trim()));
+    const joinLines = (arr) => escapeHtml((arr || []).join('\n'));
+    const taStyle = 'width:100%; font-family:inherit; font-size:13px; padding:10px; border-radius:8px; border:1px solid var(--border); background:var(--bg-input,transparent); color:inherit;';
+    const editLabelStyle = 'font-size:12px; color:var(--text-dim);';
+
     importReview.innerHTML = `
       <div class="add-card" style="text-align:left;">
         <div class="pill pending" style="margin-bottom:10px;">Aguardando aprovação</div>
@@ -646,12 +761,50 @@
         </div>
 
         <div style="font-size:13px; color:var(--text-dim); margin-bottom:6px;">${priceInfo}</div>
-        <div style="font-size:13px; color:var(--text-dim); margin-bottom:6px;">Preço de venda (R$):</div>
-        <div style="display:flex; gap:8px; margin-bottom:14px;">
+        <div style="display:flex; gap:8px; margin-bottom:6px;">
+          <div style="flex:1; font-size:13px; color:var(--text-dim);">Preço de venda (R$):</div>
+          <div style="flex:1; font-size:13px; color:var(--text-dim);">Preço "de" (riscado, R$):</div>
+        </div>
+        <div style="display:flex; gap:8px; margin-bottom:6px;">
           <input type="number" step="0.01" min="0" id="import-price-input" value="${salePriceValue}" placeholder="ex: 189.90" style="flex:1;" />
-          <button class="btn" id="import-price-save-btn">Salvar preço</button>
+          <input type="number" step="0.01" min="0" id="import-compare-input" value="${compareAtValue}" placeholder="ex: 269.90 (vazio = sem desconto)" style="flex:1;" />
+          <button class="btn" id="import-price-save-btn">Salvar preços</button>
+        </div>
+        <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">
+          O preço "de" vem sugerido (venda × 1,4) e aparece riscado na loja. Use só um valor pelo qual o produto já foi vendido de verdade — "desconto" inventado pode ser considerado propaganda enganosa.
+        </div>
+
+        <div style="font-size:13px; color:var(--text-dim); margin-bottom:6px;">Dimensões do produto (entram nas Especificações):</div>
+        <div style="display:flex; gap:8px; margin-bottom:14px;">
+          <input type="text" id="import-dimensions-input" value="${escapeHtml(dimensionsValue)}" placeholder="ex: 60 x 40 x 25 cm" style="flex:1;" />
+          <button class="btn" id="import-dimensions-save-btn">Salvar dimensões</button>
         </div>
         <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">${specsInfo}</div>
+
+        <details id="import-editor" style="margin-bottom:14px; border:1px solid var(--border); border-radius:10px; padding:10px 12px;">
+          <summary style="cursor:pointer; font-size:13px; color:var(--text-dim);">Editar descrição (textos e listas)</summary>
+          <div style="margin-top:10px; display:flex; flex-direction:column; gap:6px;">
+            <label style="${editLabelStyle}">Frase de destaque</label>
+            <input type="text" id="edit-headline" value="${escapeHtml(seoc.headline || '')}" />
+            <label style="${editLabelStyle}">Introdução</label>
+            <textarea id="edit-intro" rows="3" style="${taStyle}">${escapeHtml(seoc.intro || '')}</textarea>
+            ${editorSections.map((s, i) => `
+              <div class="import-section-row" style="display:flex; flex-direction:column; gap:6px;">
+                <label style="${editLabelStyle}">Seção ${i + 1} — título e texto</label>
+                <input type="text" class="sec-heading" value="${escapeHtml(s.heading || '')}" />
+                <textarea class="sec-text" rows="3" style="${taStyle}">${escapeHtml(s.text || '')}</textarea>
+              </div>`).join('')}
+            <label style="${editLabelStyle}">Características (uma por linha)</label>
+            <textarea id="edit-features" rows="4" style="${taStyle}">${joinLines(seoc.features)}</textarea>
+            <label style="${editLabelStyle}">Especificações (uma por linha — as dimensões ficam no campo acima)</label>
+            <textarea id="edit-specs" rows="4" style="${taStyle}">${joinLines(specsForEditor)}</textarea>
+            <label style="${editLabelStyle}">Itens inclusos (um por linha)</label>
+            <textarea id="edit-included" rows="3" style="${taStyle}">${joinLines(seoc.includedItems)}</textarea>
+            <label style="${editLabelStyle}">Observações importantes (uma por linha)</label>
+            <textarea id="edit-care" rows="3" style="${taStyle}">${joinLines(seoc.careNotes)}</textarea>
+            <div><button class="btn btn-primary" id="import-content-save-btn">Salvar descrição</button></div>
+          </div>
+        </details>
 
         <div style="font-size:13px; color:var(--text-dim); margin-bottom:6px;">Descrição gerada (copy):</div>
         <div class="description-preview" id="import-description-preview">${imp.body_html}</div>
@@ -787,67 +940,105 @@
     });
 
     const priceInput = importReview.querySelector('#import-price-input');
-    const priceSaveBtn = importReview.querySelector('#import-price-save-btn');
+    const compareInput = importReview.querySelector('#import-compare-input');
+    const dimensionsInput = importReview.querySelector('#import-dimensions-input');
+    const titleInput = importReview.querySelector('#import-title-input');
+    const editorEl = importReview.querySelector('#import-editor');
 
-    function readPriceInput() {
-      const raw = priceInput.value.trim().replace(',', '.');
-      const num = parseFloat(raw);
+    function parseMoney(el) {
+      const num = parseFloat(el.value.trim().replace(',', '.'));
       return Number.isFinite(num) && num > 0 ? num : null;
     }
 
-    priceSaveBtn.addEventListener('click', async () => {
-      const newPrice = readPriceInput();
-      if (newPrice === null) { alert('Digite um preço de venda maior que zero.'); return; }
+    async function callImport(payload) {
+      const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ import_id: imp.id, ...payload }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
+      return data;
+    }
 
-      priceSaveBtn.disabled = true;
-      priceSaveBtn.innerHTML = '<span class="loader"></span>';
-      try {
-        const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-          },
-          body: JSON.stringify({ action: 'update_price', import_id: imp.id, sale_price: newPrice }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
-        renderImportReview(data.import);
-      } catch (err) {
-        alert('Erro ao salvar preço: ' + err.message);
-        priceSaveBtn.disabled = false;
-        priceSaveBtn.textContent = 'Salvar preço';
-      }
-    });
+    const linesOf = (id) => editorEl.querySelector(id).value.split('\n').map((l) => l.trim()).filter(Boolean);
 
-    const titleInput = importReview.querySelector('#import-title-input');
-    const titleSaveBtn = importReview.querySelector('#import-title-save-btn');
+    function readEditorContent() {
+      const rows = [...editorEl.querySelectorAll('.import-section-row')];
+      return {
+        headline: editorEl.querySelector('#edit-headline').value.trim(),
+        intro: editorEl.querySelector('#edit-intro').value.trim(),
+        sections: rows.map((r) => ({
+          heading: r.querySelector('.sec-heading').value.trim(),
+          text: r.querySelector('.sec-text').value.trim(),
+        })),
+        features: linesOf('#edit-features'),
+        specifications: linesOf('#edit-specs'),
+        includedItems: linesOf('#edit-included'),
+        careNotes: linesOf('#edit-care'),
+      };
+    }
 
-    titleSaveBtn.addEventListener('click', async () => {
+    // Salva só o que mudou (título → preços → conteúdo/dimensões) e devolve o registro mais novo.
+    async function saveAll() {
+      let current = imp;
+
       const newTitle = titleInput.value.trim();
-      if (!newTitle) { alert('O título não pode ficar vazio.'); return; }
-      if (newTitle === imp.title) return;
+      if (!newTitle) throw new Error('O título não pode ficar vazio.');
+      if (newTitle !== imp.title) current = (await callImport({ action: 'update_title', title: newTitle })).import;
 
-      titleSaveBtn.disabled = true;
-      titleSaveBtn.innerHTML = '<span class="loader"></span>';
-      try {
-        const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-          },
-          body: JSON.stringify({ action: 'update_title', import_id: imp.id, title: newTitle }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
-        renderImportReview(data.import); // re-renderiza com título/descrição atualizados
-      } catch (err) {
-        alert('Erro ao salvar título: ' + err.message);
-        titleSaveBtn.disabled = false;
-        titleSaveBtn.textContent = 'Salvar título';
+      const price = parseMoney(priceInput);
+      const compare = parseMoney(compareInput);
+      const savedPrice = imp.sale_price != null ? Number(imp.sale_price) : null;
+      const savedCompare = seoc.compareAtPrice != null ? Number(seoc.compareAtPrice) : null;
+      if (price !== null && (price !== savedPrice || compare !== savedCompare)) {
+        current = (await callImport({ action: 'update_price', sale_price: price, compare_at_price: compare })).import;
+      } else if (price === null && compareInput.value.trim()) {
+        throw new Error('Preencha o preço de venda antes de definir o preço "de".');
       }
-    });
+      if (price !== null && compare !== null && compare <= price) {
+        throw new Error('O preço "de" precisa ser maior que o preço de venda (ou deixe vazio).');
+      }
+
+      const payload = { action: 'update_content' };
+      let dirty = false;
+      if (dimensionsInput.value.trim() !== dimensionsValue.trim()) { payload.dimensions = dimensionsInput.value.trim(); dirty = true; }
+      const contentNow = readEditorContent();
+      const contentBefore = JSON.stringify({
+        headline: seoc.headline || '', intro: seoc.intro || '',
+        sections: editorSections.map((s) => ({ heading: (s.heading || '').trim(), text: (s.text || '').trim() })),
+        features: seoc.features || [], specifications: specsForEditor,
+        includedItems: seoc.includedItems || [], careNotes: seoc.careNotes || [],
+      });
+      if (JSON.stringify(contentNow) !== contentBefore) { payload.content = contentNow; dirty = true; }
+      if (dirty) current = (await callImport(payload)).import;
+
+      return current;
+    }
+
+    function wireSave(btn, label) {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="loader"></span>';
+        try {
+          const updated = await saveAll();
+          const wasOpen = editorEl.open;
+          renderImportReview(updated);
+          if (wasOpen) importReview.querySelector('#import-editor').open = true;
+        } catch (err) {
+          alert('Erro ao salvar: ' + err.message);
+          btn.disabled = false;
+          btn.textContent = label;
+        }
+      });
+    }
+    wireSave(importReview.querySelector('#import-price-save-btn'), 'Salvar preços');
+    wireSave(importReview.querySelector('#import-dimensions-save-btn'), 'Salvar dimensões');
+    wireSave(importReview.querySelector('#import-content-save-btn'), 'Salvar descrição');
+    wireSave(importReview.querySelector('#import-title-save-btn'), 'Salvar título');
 
     async function updateImportImages(newImages) {
       const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
@@ -897,33 +1088,8 @@
       e.target.disabled = true;
       e.target.innerHTML = '<span class="loader"></span> Criando na Shopify...';
       try {
-        // Se você alterou o título ou o preço e não clicou em "Salvar",
-        // salva agora, antes de criar o produto.
-        const saveHeaders = {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-        };
-        const pendingTitle = titleInput.value.trim();
-        if (pendingTitle && pendingTitle !== imp.title) {
-          const r = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
-            method: 'POST',
-            headers: saveHeaders,
-            body: JSON.stringify({ action: 'update_title', import_id: imp.id, title: pendingTitle }),
-          });
-          const d = await r.json();
-          if (!r.ok) throw new Error('Não consegui salvar o título: ' + (d.error || 'erro desconhecido'));
-        }
-        const pendingPrice = readPriceInput();
-        const savedPrice = imp.sale_price != null ? Number(imp.sale_price) : null;
-        if (pendingPrice !== null && pendingPrice !== savedPrice) {
-          const r = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
-            method: 'POST',
-            headers: saveHeaders,
-            body: JSON.stringify({ action: 'update_price', import_id: imp.id, sale_price: pendingPrice }),
-          });
-          const d = await r.json();
-          if (!r.ok) throw new Error('Não consegui salvar o preço: ' + (d.error || 'erro desconhecido'));
-        }
+        // Salva qualquer edição pendente (título, preços, dimensões, descrição) antes de criar.
+        await saveAll();
 
         const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
           method: 'POST',
@@ -941,6 +1107,7 @@
         e.target.textContent = 'Criado ✓';
         importReview.querySelector('.reject-import-btn').style.display = 'none';
         reviewStatus.innerHTML += `<br><a href="${data.admin_url}" target="_blank" style="color:var(--accent);">Abrir na Shopify →</a>`;
+        loadPendingImports();
       } catch (err) {
         reviewStatus.textContent = err.message;
         reviewStatus.classList.add('err');
@@ -959,6 +1126,7 @@
         body: JSON.stringify({ action: 'reject', import_id: imp.id }),
       });
       importReview.style.display = 'none';
+      loadPendingImports();
     });
   }
 
