@@ -633,13 +633,16 @@
            </div>`
         ).join('')}</div>
 
-        <div style="margin-bottom:14px; padding:12px; border:1px dashed var(--border); border-radius:10px;">
+        <div style="margin-bottom:14px; padding:12px; border:1px solid var(--border); border-radius:10px;">
           <div style="font-size:13px; color:var(--text-dim); margin-bottom:8px;">
-            Imagens com IA: gera 5 fotos de ambiente (ângulos diferentes, mesma luz) + 1 imagem de medidas em fundo branco, a partir das fotos acima, em WebP de até 100 KB, e <strong>substitui</strong> as fotos atuais. Remova antes as fotos ruins (✕) pra IA usar só as boas como referência.
+            Imagens do Flow: gere as imagens lá e solte aqui (até 12). Elas são convertidas pra <strong>WebP de até 100 KB</strong> e <strong>substituem</strong> as fotos atuais. Depois, ajuste a ordem com ‹ › se precisar.
           </div>
-          <input type="text" id="import-dimensions-input" placeholder="Medidas do produto (opcional) — ex: 60 x 40 x 25 cm" style="margin-bottom:8px;" />
-          <button class="btn btn-primary" id="import-generate-images-btn">Gerar 6 imagens com IA</button>
-          <div class="status-msg" id="import-generate-status"></div>
+          <div id="import-flow-drop" style="padding:22px; text-align:center; border:2px dashed var(--border); border-radius:10px; cursor:pointer; font-size:13px; color:var(--text-dim); margin-bottom:8px;">
+            Arraste as imagens aqui ou clique pra escolher
+          </div>
+          <input type="file" id="import-flow-file" accept="image/*" multiple style="display:none;" />
+          <button class="btn" id="import-copy-prompt-btn">Copiar prompt do Flow</button>
+          <div class="status-msg" id="import-flow-status"></div>
         </div>
 
         <div style="font-size:13px; color:var(--text-dim); margin-bottom:6px;">${priceInfo}</div>
@@ -663,43 +666,124 @@
 
     const reviewStatus = importReview.querySelector('#import-review-status');
     const descriptionPreview = importReview.querySelector('#import-description-preview');
-    const generateBtn = importReview.querySelector('#import-generate-images-btn');
-    const generateStatus = importReview.querySelector('#import-generate-status');
-    const dimensionsInput = importReview.querySelector('#import-dimensions-input');
+    // ---------- Imagens geradas no Flow: converte pra WebP ≤ 100 KB e sobe ----------
+    const FLOW_PROMPT = `crie 5 fotos desses itens pegando vários ângulos diferentes porém no mesmo ambiente e com a mesma luz ambiente, luz ambiente um levemente quente. o ambiente precisa ser moderno, pois o nosso publico é um publico com poder aquisitivo bom. não precisa inserir coisas no ambiente que não temos no brasil, como por exemplo uma chaminé no ambiente. o foco precisa ser nesse item pois é ele que será vendidos em nosso site de vendas. além dessas 5 imagens, crie outra com foco nas dimensoes dos itens, essa pode ser com o fundo branco. não altere nenhuma característica do item como tamanho, cor e textura. não insira nenhuma palavra ou frase em ingles. todas as imagens devem estar em 1:1.`;
 
-    generateBtn.addEventListener('click', async () => {
-      generateBtn.disabled = true;
-      generateBtn.innerHTML = '<span class="loader"></span> Gerando (leva cerca de 1 minuto)...';
-      generateStatus.textContent = '';
-      generateStatus.className = 'status-msg';
+    const flowDrop = importReview.querySelector('#import-flow-drop');
+    const flowFileInput = importReview.querySelector('#import-flow-file');
+    const flowStatus = importReview.querySelector('#import-flow-status');
+    const copyPromptBtn = importReview.querySelector('#import-copy-prompt-btn');
+
+    copyPromptBtn.addEventListener('click', async () => {
       try {
+        await navigator.clipboard.writeText(FLOW_PROMPT);
+        copyPromptBtn.textContent = 'Prompt copiado ✓';
+      } catch {
+        window.prompt('Copie o prompt (Ctrl+C):', FLOW_PROMPT);
+      }
+      setTimeout(() => { copyPromptBtn.textContent = 'Copiar prompt do Flow'; }, 2000);
+    });
+
+    function loadImageFromFile(file) {
+      return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error(`Não consegui abrir "${file.name}".`)); };
+        img.src = url;
+      });
+    }
+
+    function canvasToBlob(canvas, type, quality) {
+      return new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+    }
+
+    function blobToBase64(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1]);
+        reader.onerror = () => reject(new Error('Falha ao ler a imagem convertida.'));
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    // Converte pra WebP com no máximo 100 KB: tenta qualidades cada vez
+    // menores e, se não couber, reduz as dimensões (sem cortar a imagem).
+    async function fileToWebpUnder100kb(file) {
+      const img = await loadImageFromFile(file);
+      const maxBytes = 100 * 1024;
+      const natural = Math.max(img.naturalWidth, img.naturalHeight);
+
+      for (const side of [1024, 900, 800, 700, 600, 512]) {
+        const scale = Math.min(1, side / natural);
+        const w = Math.max(1, Math.round(img.naturalWidth * scale));
+        const h = Math.max(1, Math.round(img.naturalHeight * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+
+        for (const quality of [0.82, 0.74, 0.66, 0.58, 0.5, 0.42, 0.34, 0.26]) {
+          const blob = await canvasToBlob(canvas, 'image/webp', quality);
+          if (!blob || blob.type !== 'image/webp') {
+            throw new Error('Este navegador não consegue gerar WebP. Use o Chrome.');
+          }
+          if (blob.size <= maxBytes) return blob;
+        }
+      }
+      throw new Error(`"${file.name}" não coube em 100 KB.`);
+    }
+
+    async function handleFlowFiles(fileList) {
+      flowStatus.className = 'status-msg';
+      const files = Array.from(fileList)
+        .filter((f) => f.type.startsWith('image/'))
+        .slice(0, 12)
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+      if (!files.length) {
+        flowStatus.textContent = 'Nenhuma imagem válida selecionada.';
+        flowStatus.classList.add('err');
+        return;
+      }
+
+      try {
+        const converted = [];
+        for (let i = 0; i < files.length; i++) {
+          flowStatus.textContent = `Convertendo ${i + 1} de ${files.length}...`;
+          const blob = await fileToWebpUnder100kb(files[i]);
+          converted.push({ name: files[i].name, data: await blobToBase64(blob) });
+        }
+
+        flowStatus.textContent = 'Enviando...';
         const res = await fetch(IMPORT_TO_SHOPIFY_FN_URL, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
           },
-          body: JSON.stringify({
-            action: 'generate_images',
-            import_id: imp.id,
-            dimensions: dimensionsInput.value.trim(),
-          }),
+          body: JSON.stringify({ action: 'upload_images', import_id: imp.id, images: converted }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
-
         renderImportReview(data.import);
-        if (data.failures && data.failures.length) {
-          const st = importReview.querySelector('#import-generate-status');
-          st.textContent = `${data.generated} imagem(ns) geradas. Avisos: ${data.failures.join(' | ')}`;
-          st.classList.add('err');
-        }
       } catch (err) {
-        generateStatus.textContent = err.message;
-        generateStatus.classList.add('err');
-        generateBtn.disabled = false;
-        generateBtn.textContent = 'Gerar 6 imagens com IA';
+        flowStatus.textContent = err.message;
+        flowStatus.classList.add('err');
       }
+    }
+
+    flowDrop.addEventListener('click', () => flowFileInput.click());
+    flowFileInput.addEventListener('change', (e) => handleFlowFiles(e.target.files));
+    flowDrop.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      flowDrop.style.borderColor = 'var(--accent)';
+    });
+    flowDrop.addEventListener('dragleave', () => { flowDrop.style.borderColor = ''; });
+    flowDrop.addEventListener('drop', (e) => {
+      e.preventDefault();
+      flowDrop.style.borderColor = '';
+      handleFlowFiles(e.dataTransfer.files);
     });
 
     const priceInput = importReview.querySelector('#import-price-input');
