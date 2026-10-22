@@ -629,6 +629,21 @@
     }
   }
 
+  const shopeeQueue = [];
+  function shortUrl(u) {
+    try { const x = new URL(u); return decodeURIComponent(x.pathname).slice(0, 70); } catch { return u.slice(0, 70); }
+  }
+  // Puxa o próximo link da Shopee da fila pro modo manual.
+  function nextShopeeManual() {
+    if (!shopeeQueue.length) return;
+    importUrlInput.value = shopeeQueue.shift();
+    importManualFields.style.display = 'block';
+    importManualTitle.focus();
+    importStatus.className = 'status-msg ok';
+    importStatus.textContent = `Shopee (modo manual): preencha título e imagens deste produto. Faltam ${shopeeQueue.length} na fila.`;
+    importManualFields.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
   batchImportBtn.addEventListener('click', async () => {
     const urls = [...new Set(batchImportUrls.value.split('\n').map((s) => s.trim()).filter(Boolean))];
     if (!urls.length) return;
@@ -639,20 +654,22 @@
       const url = urls[i];
       batchImportStatus.className = 'status-msg';
       batchImportStatus.textContent = `Processando ${i + 1} de ${urls.length}...\n` + lines.join('\n');
-      if (isShopeeLink(url)) { lines.push(`⚠ Shopee (use o modo manual): ${url}`); continue; }
+      if (isShopeeLink(url)) { shopeeQueue.push(url); lines.push(`⏭ Shopee → vai pro modo manual: ${shortUrl(url)}`); continue; }
       try {
         await postImport({ action: 'prepare', product_url: url });
         ok++;
-        lines.push(`✓ ${url}`);
+        lines.push(`✓ ${shortUrl(url)}`);
       } catch (err) {
-        lines.push(`✗ ${url} — ${err.message}`);
+        lines.push(`✗ ${shortUrl(url)} — ${err.message}`);
       }
     }
     batchImportBtn.disabled = false;
-    batchImportStatus.className = 'status-msg ' + (ok ? 'ok' : 'err');
-    batchImportStatus.textContent = `${ok} de ${urls.length} importados. Revise na lista "Aguardando revisão".\n` + lines.join('\n');
+    batchImportStatus.className = 'status-msg ' + (ok || shopeeQueue.length ? 'ok' : 'err');
+    batchImportStatus.textContent = `${ok} importados automaticamente. ` +
+      (shopeeQueue.length ? `${shopeeQueue.length} da Shopee aguardam o modo manual (abaixo).` : 'Revise na lista "Aguardando revisão".') + '\n' + lines.join('\n');
     batchImportUrls.value = '';
     loadPendingImports();
+    nextShopeeManual();
   });
 
   loadPendingImports();
@@ -699,6 +716,8 @@
     importManualImages.value = '';
     importManualPrice.value = '';
     importManualFields.style.display = 'none';
+    loadPendingImports();
+    nextShopeeManual();
   });
 
   function renderImportReview(imp) {
